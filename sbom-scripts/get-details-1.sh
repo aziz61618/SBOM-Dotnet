@@ -177,20 +177,21 @@ parse_licenses() {
         local name="" version="" license=""
         
         # Try format: PackageName (Version) [Licenses: License]
-        if [[ $line =~ ^([a-zA-Z0-9._\-@/]+)[[:space:]]*\(([^)]+)\)[[:space:]]*\[.*[Ll]icense[s]?:[[:space:]]*([^\]]+)\] ]]; then
-            name="${BASH_REMATCH[1]}"
-            version="${BASH_REMATCH[2]}"
-            license="${BASH_REMATCH[3]}"
+        # Using grep with ERE for better compatibility
+        if echo "$line" | grep -qE '^([a-zA-Z0-9._\-@/]+)[[:space:]]*\(([^)]+)\)[[:space:]]*\[.*[Ll]icense[s]?:[[:space:]]*(.+)\]'; then
+            name=$(echo "$line" | grep -oE '^[a-zA-Z0-9._\-@/]+' | head -1)
+            version=$(echo "$line" | grep -oE '\(([^)]+)\)' | sed 's/[()]//g')
+            license=$(echo "$line" | grep -oE '\[.*[Ll]icense[s]?:[[:space:]]*([^\]]+)' | sed 's/.*[Ll]icense[s]*:[[:space:]]*//' | sed 's/[[:space:]]*$//')
         # Try format: PackageName (Version) - License
-        elif [[ $line =~ ^([a-zA-Z0-9._\-@/]+)[[:space:]]*\(([^)]+)\)[[:space:]]*-[[:space:]]*(.+)$ ]]; then
-            name="${BASH_REMATCH[1]}"
-            version="${BASH_REMATCH[2]}"
-            license="${BASH_REMATCH[3]}"
+        elif echo "$line" | grep -qE '^([a-zA-Z0-9._\-@/]+)[[:space:]]*\(([^)]+)\)[[:space:]]*-[[:space:]]*(.+)$'; then
+            name=$(echo "$line" | grep -oE '^[a-zA-Z0-9._\-@/]+' | head -1)
+            version=$(echo "$line" | grep -oE '\(([^)]+)\)' | sed 's/[()]//g')
+            license=$(echo "$line" | sed 's/^[^-]*-[[:space:]]*//')
         # Try format: PackageName Version - License (without parentheses)
-        elif [[ $line =~ ^([a-zA-Z0-9._\-@/]+)[[:space:]]+([0-9]+\.[0-9.]+)[[:space:]]*-[[:space:]]*(.+)$ ]]; then
-            name="${BASH_REMATCH[1]}"
-            version="${BASH_REMATCH[2]}"
-            license="${BASH_REMATCH[3]}"
+        elif echo "$line" | grep -qE '^([a-zA-Z0-9._\-@/]+)[[:space:]]+([0-9]+\.[0-9.]+)[[:space:]]*-[[:space:]]*(.+)$'; then
+            name=$(echo "$line" | awk '{print $1}')
+            version=$(echo "$line" | grep -oE '[0-9]+\.[0-9.]+' | head -1)
+            license=$(echo "$line" | sed 's/^[^-]*-[[:space:]]*//')
         else
             # Skip lines that don't match any expected format
             continue
