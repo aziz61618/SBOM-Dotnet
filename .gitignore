@@ -1,0 +1,8 @@
+bin/
+obj/
+# Scanner outputs - keep out of the repo
+outdated-dependencies.txt
+sbom-licenses.txt
+trivy-vulnerabilities.txt
+sbom-result.txt
+*.csv
