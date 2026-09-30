@@ -1,0 +1,99 @@
+name: Dotnet SBOM Scan
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: project
+          path: .
+
+  sbom_scan:
+    runs-on: ubuntu-22.04
+    needs: build
+
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: project
+          path: .
+
+      - name: Install .NET SDKs (7.0 & 8.0)
+        run: |
+          set -e
+          curl -sSL https://dot.net/v1/dotnet-install.sh -o sbom-scripts/dotnet-install.sh
+          chmod +x sbom-scripts/dotnet-install.sh
+
+          sbom-scripts/dotnet-install.sh --version 8.0.413 --install-dir $HOME/dotnet
+          sbom-scripts/dotnet-install.sh --version 7.0.410 --install-dir $HOME/dotnet
+
+          echo "$HOME/dotnet" >> $GITHUB_PATH
+          echo "DOTNET_ROOT=$HOME/dotnet" >> $GITHUB_ENV
+
+          $HOME/dotnet/dotnet --info
+
+      - name: Run sbom-scripts/get-details-1.sh
+        run: |
+          export PATH=$HOME/dotnet:$PATH
+          export DOTNET_ROOT=$HOME/dotnet
+          dotnet restore
+          dotnet --list-sdks
+          bash sbom-scripts/get-details-1.sh
+          echo "After get-details-1.sh:"
+          ls -l
+
+      - name: Run sbom-scripts/get-details-2.sh
+        run: |
+          export PATH=$HOME/dotnet:$PATH
+          export DOTNET_ROOT=$HOME/dotnet
+          bash sbom-scripts/get-details-2.sh
+          echo "After get-details-2.sh:"
+          ls -l
+
+      - name: Install PowerShell
+        run: |
+          wget https://github.com/PowerShell/PowerShell/releases/download/v7.5.0/powershell_7.5.0-1.deb_amd64.deb
+          sudo dpkg -i powershell_7.5.0-1.deb_amd64.deb || true
+          sudo apt-get --fix-broken install -y
+          pwsh --version
+          rm -rf powershell_7.5.0-1.deb_amd64.deb
+
+      - name: Run sbom-scripts/merge-details.ps1
+        shell: pwsh
+        run: |
+          sbom-scripts/merge-details.ps1
+          echo "After merge-details.ps1:"
+          ls -l
+          cat sbom-result.txt || echo "sbom-result.txt not found"
+
+      - name: Run sbom-scripts/trivy.sh
+        run: |
+          bash sbom-scripts/trivy.sh
+          echo "After trivy.sh:"
+          ls -l
+          cat trivy-vulnerabilities.txt || echo "trivy-vulnerabilities.txt not found"
+
+      - name: Upload Trivy Vulnerabilities
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-vulnerabilities
+          path: trivy-vulnerabilities.txt
+
+      - name: Upload SBOM Result
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-result
+          path: sbom-result.txt
