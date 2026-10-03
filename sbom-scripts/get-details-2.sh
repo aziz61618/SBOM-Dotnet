@@ -2,7 +2,6 @@
 #!/bin/bash
 
 # Define file paths
-input_file="outdated-dependencies.txt"
 dependency_file="dependency-report.txt"
 output_file="formatted_dependencies.txt"
 csv_output_file="formatted_dependencies.csv"
@@ -10,12 +9,6 @@ csv_output_file="formatted_dependencies.csv"
 # Check if the dependency report exists
 if [[ ! -f "$dependency_file" ]]; then
     echo "File $dependency_file not found!"
-    exit 1
-fi
-
-# Check if outdated report exists
-if [[ ! -f "$input_file" ]]; then
-    echo "File $input_file not found!"
     exit 1
 fi
 
@@ -33,7 +26,6 @@ echo '"Dependency","Current Version","Latest Version","Dependency Type"' > "$csv
 
 declare -A dependency_type
 declare -A dependency_version
-declare -A latest_version
 declare -A seen_dependencies
 
 ###############################################################################
@@ -104,38 +96,72 @@ while IFS= read -r line; do
 done < "$dependency_file"
 
 ###############################################################################
-# Read outdated-dependencies.txt
+# Query NuGet for latest versions
 #
-# This file is authoritative only for:
-#   - Current version
+# NuGet API is now authoritative for:
 #   - Latest version
 #
-# Existing version parsing is intentionally preserved.
+# Current/resolved version continues to come from dependency-report.txt.
 ###############################################################################
 
-while IFS= read -r line; do
+declare -A nuget_latest_version
 
-    if [[ "$line" == *">"* ]]; then
+echo ""
+echo "============================================================"
+echo "QUERYING NUGET FOR LATEST VERSIONS"
+echo "============================================================"
 
-        formatted_line=$(echo "$line" | sed 's/^[[:space:]]*>[[:space:]]*//')
+for dependency in "${!dependency_type[@]}"; do
 
-        # Preserve existing parsing
-        dependency=$(echo "$formatted_line" | awk '{print $1}')
-        current_version=$(echo "$formatted_line" | awk '{print $2}')
-        latest_version_value=$(echo "$formatted_line" | awk '{print $4}')
+    # Convert package ID to lowercase for NuGet flat-container API
+    package_id=$(echo "$dependency" | tr '[:upper:]' '[:lower:]')
 
-        if [[ -n "$dependency" ]]; then
+    nuget_url="https://api.nuget.org/v3-flatcontainer/${package_id}/index.json"
 
-            latest_version["$dependency"]="$latest_version_value"
+    echo "Checking NuGet: $dependency"
 
-            # Keep the existing current version from outdated report
-            dependency_version["$dependency"]="$current_version"
+    response=$(curl -sS --fail --max-time 15 "$nuget_url" 2>/dev/null)
 
-        fi
+    if [[ $? -ne 0 || -z "$response" ]]; then
+
+        echo "  NuGet lookup failed: $dependency"
+
+        nuget_latest_version["$dependency"]="N/A"
+
+        continue
 
     fi
 
-done < "$input_file"
+    nuget_version=$(printf '%s' "$response" | python3 -c '
+import sys
+import json
+
+try:
+    data = json.load(sys.stdin)
+    versions = data.get("versions", [])
+
+    # Keep only stable versions
+    stable_versions = [
+        version for version in versions
+        if "-" not in version
+    ]
+
+    if stable_versions:
+        print(stable_versions[-1])
+    else:
+        print("N/A")
+
+except Exception:
+    print("N/A")
+')
+
+    [[ -z "$nuget_version" ]] && nuget_version="N/A"
+
+    nuget_latest_version["$dependency"]="$nuget_version"
+
+    echo "  NuGet latest: $nuget_version"
+
+done
 
 ###############################################################################
 # Generate formatted output for ALL dependencies
@@ -145,31 +171,20 @@ for dependency in "${!dependency_type[@]}"; do
 
     current_version="${dependency_version[$dependency]}"
     dependency_type_value="${dependency_type[$dependency]}"
+    latest_version_value="${nuget_latest_version[$dependency]:-N/A}"
 
     ###########################################################################
-    # If package exists in outdated report
+    # Compare current version with NuGet latest version
+    #
+    # Preserve existing ** behavior
     ###########################################################################
 
-    if [[ -n "${latest_version[$dependency]}" ]]; then
+    if [[ "$latest_version_value" != "N/A" ]]; then
 
-        latest_version_value="${latest_version[$dependency]}"
-
-        # Preserve existing ** behavior
         if [[ "$current_version" != "$latest_version_value" ]]; then
             current_version="${current_version}**"
             latest_version_value="${latest_version_value}**"
         fi
-
-    else
-
-        #######################################################################
-        # Package is not outdated.
-        #
-        # We know current/resolved version, but we do NOT have a latest
-        # version from outdated-dependencies.txt.
-        #######################################################################
-
-        latest_version_value="N/A"
 
     fi
 
@@ -203,86 +218,14 @@ done
 # Output files
 ###############################################################################
 
+echo ""
+echo "============================================================"
+echo "FORMATTED DEPENDENCIES"
+echo "============================================================"
+
 echo "Formatted dependencies saved to $output_file:"
 cat "$output_file"
 
 echo ""
 echo "Formatted dependencies CSV saved to $csv_output_file:"
-cat "$csv_output_file"
-
-###############################################################################
-# Append NuGet latest version to CSV
-# Existing TXT and CSV generation above remains unchanged
-###############################################################################
-
-echo ""
-echo "============================================================"
-echo "ADDING NUGET LATEST VERSION TO CSV"
-echo "============================================================"
-
-nuget_temp_file="${csv_output_file}.tmp"
-
-# Read existing CSV and add the new header column
-head -n 1 "$csv_output_file" | sed 's/"Dependency Type"$/"Dependency Type","NUGET_VERSION"/' > "$nuget_temp_file"
-
-# Process every dependency row from the existing CSV
-tail -n +2 "$csv_output_file" | while IFS=',' read -r dependency current_version latest_version dependency_type; do
-
-    # Remove surrounding quotes from dependency name
-    dependency=$(echo "$dependency" | sed 's/^"//;s/"$//')
-
-    # Convert package ID to lowercase for NuGet flat-container API
-    package_id=$(echo "$dependency" | tr '[:upper:]' '[:lower:]')
-
-    nuget_url="https://api.nuget.org/v3-flatcontainer/${package_id}/index.json"
-
-    echo "Checking NuGet: $dependency"
-
-    response=$(curl -sS --fail --max-time 15 "$nuget_url" 2>/dev/null)
-
-    if [[ $? -ne 0 || -z "$response" ]]; then
-        nuget_version="N/A"
-    else
-        nuget_version=$(printf '%s' "$response" | python3 -c '
-import sys
-import json
-
-try:
-    data = json.load(sys.stdin)
-    versions = data.get("versions", [])
-
-    # Keep only stable versions
-    stable_versions = [
-        version for version in versions
-        if "-" not in version
-    ]
-
-    if stable_versions:
-        print(stable_versions[-1])
-    else:
-        print("N/A")
-
-except Exception:
-    print("N/A")
-')
-
-        [[ -z "$nuget_version" ]] && nuget_version="N/A"
-    fi
-
-    echo "  NUGET_VERSION: $nuget_version"
-
-    # Append the new column without changing existing values
-    echo "${dependency},${current_version},${latest_version},${dependency_type},\"${nuget_version}\"" \
-        >> "$nuget_temp_file"
-
-done
-
-# Replace the original CSV with the updated CSV
-mv "$nuget_temp_file" "$csv_output_file"
-
-echo ""
-echo "============================================================"
-echo "FINAL CSV WITH NUGET_VERSION"
-echo "============================================================"
-
 cat "$csv_output_file"
