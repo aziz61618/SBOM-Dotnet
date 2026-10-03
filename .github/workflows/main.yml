@@ -71,6 +71,9 @@ jobs:
           bash sbom-scripts/get-details-2.sh
           echo "After get-details-2.sh:"
           ls -l
+          echo ""
+          echo "================ formatted_dependencies.txt ================"
+          cat formatted_dependencies.txt
 
       - name: Install PowerShell
         run: |
