@@ -1,53 +1,138 @@
 ```bash
 #!/bin/bash
 
+###############################################################################
+# .NET SBOM / Dependency / License Scanner
+#
+# Purpose:
+#   - Discover ALL .csproj and .sln files recursively
+#   - Restore ALL projects
+#   - Scan DIRECT + TRANSITIVE NuGet dependencies
+#   - Generate consolidated dependency report
+#   - Generate per-project JSON dependency reports
+#   - Generate consolidated license report
+#   - Generate consolidated outdated dependency report
+#
+# Expected .NET installation:
+#   $HOME/dotnet
+###############################################################################
+
 set -u
 
 ###############################################################################
 # Configuration
 ###############################################################################
 
-export PATH="$HOME/.dotnet:$HOME/.dotnet/tools:$PATH"
-export DOTNET_ROOT="$HOME/.dotnet"
+export DOTNET_ROOT="$HOME/dotnet"
+export PATH="$HOME/dotnet:$HOME/.dotnet/tools:$PATH"
 
 REPORT_DIR="./sbom-reports"
+JSON_DIR="$REPORT_DIR/dependencies-json"
 
 mkdir -p "$REPORT_DIR"
+mkdir -p "$JSON_DIR"
 
-echo "============================================================"
-echo " .NET Dependency / License Scan"
-echo "============================================================"
+RESTORE_FAILED=0
+DEPENDENCY_FAILED=0
+LICENSE_FAILED=0
+OUTDATED_FAILED=0
+
+###############################################################################
+# Helper functions
+###############################################################################
+
+print_separator() {
+    echo "============================================================"
+}
+
+print_section() {
+    echo ""
+    print_separator
+    echo "$1"
+    print_separator
+}
+
+###############################################################################
+# Environment validation
+###############################################################################
+
+print_section ".NET ENVIRONMENT"
+
+echo "DOTNET_ROOT:"
+echo "$DOTNET_ROOT"
 
 echo ""
-echo "DOTNET:"
-dotnet --info
+echo "PATH:"
+echo "$PATH"
 
 echo ""
-echo "============================================================"
-echo " Installing required tools"
-echo "============================================================"
+echo "dotnet location:"
+which dotnet || true
 
-# Install dotnet-project-licenses only if not already installed
+echo ""
+echo "dotnet version:"
+dotnet --version
+
+echo ""
+echo "Installed SDKs:"
+dotnet --list-sdks
+
+echo ""
+echo "Installed runtimes:"
+dotnet --list-runtimes
+
+echo ""
+echo "Checking libhostfxr.so:"
+find "$DOTNET_ROOT" -name "libhostfxr.so" -print || true
+
+###############################################################################
+# Install / verify dotnet-project-licenses
+###############################################################################
+
+print_section "INSTALLING / VERIFYING DOTNET PROJECT LICENSES"
+
 if ! command -v dotnet-project-licenses >/dev/null 2>&1; then
-    dotnet tool install --global dotnet-project-licenses
+
+    echo "dotnet-project-licenses not found."
+    echo "Installing..."
+
+    dotnet tool install --global \
+        dotnet-project-licenses \
+        --add-source https://api.nuget.org/v3/index.json
+
 else
-    echo "dotnet-project-licenses already installed"
+
+    echo "dotnet-project-licenses already installed."
+
 fi
 
 echo ""
-echo "Installed global tools:"
+echo "Global .NET tools:"
 dotnet tool list -g
 
-###############################################################################
-# Discover projects and solutions
-###############################################################################
+echo ""
+echo "dotnet-project-licenses location:"
+which dotnet-project-licenses || true
 
 echo ""
-echo "============================================================"
-echo " Discovering .NET projects and solutions"
-echo "============================================================"
+echo "Verifying dotnet-project-licenses..."
 
-# Find all .csproj files recursively
+dotnet-project-licenses --help >/dev/null
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: dotnet-project-licenses could not be executed."
+    echo "Check DOTNET_ROOT and libhostfxr.so."
+    exit 1
+fi
+
+echo "dotnet-project-licenses is working."
+
+###############################################################################
+# Discover all .csproj files
+###############################################################################
+
+print_section "DISCOVERING .CSPROJ FILES"
+
 mapfile -d '' PROJECTS < <(
     find . \
         -type f \
@@ -57,7 +142,37 @@ mapfile -d '' PROJECTS < <(
         -print0
 )
 
-# Find all .sln files recursively
+PROJECT_COUNT="${#PROJECTS[@]}"
+
+echo "Number of .csproj files found: $PROJECT_COUNT"
+
+if [ "$PROJECT_COUNT" -eq 0 ]; then
+
+    echo ""
+    echo "ERROR: No .csproj files found."
+    echo "Make sure the source repository has been checked out."
+    exit 1
+
+fi
+
+echo ""
+
+PROJECT_NUMBER=0
+
+for project in "${PROJECTS[@]}"; do
+
+    PROJECT_NUMBER=$((PROJECT_NUMBER + 1))
+
+    echo "[$PROJECT_NUMBER] $project"
+
+done
+
+###############################################################################
+# Discover all .sln files
+###############################################################################
+
+print_section "DISCOVERING .SLN FILES"
+
 mapfile -d '' SOLUTIONS < <(
     find . \
         -type f \
@@ -67,91 +182,111 @@ mapfile -d '' SOLUTIONS < <(
         -print0
 )
 
-echo ""
-echo "Projects found : ${#PROJECTS[@]}"
-echo "Solutions found: ${#SOLUTIONS[@]}"
+SOLUTION_COUNT="${#SOLUTIONS[@]}"
+
+echo "Number of .sln files found: $SOLUTION_COUNT"
 
 echo ""
 
-if [ "${#PROJECTS[@]}" -eq 0 ]; then
-    echo "ERROR: No .csproj files found."
-    exit 1
+if [ "$SOLUTION_COUNT" -gt 0 ]; then
+
+    SOLUTION_NUMBER=0
+
+    for solution in "${SOLUTIONS[@]}"; do
+
+        SOLUTION_NUMBER=$((SOLUTION_NUMBER + 1))
+
+        echo "[$SOLUTION_NUMBER] $solution"
+
+    done
+
+else
+
+    echo "No .sln files found."
+
 fi
 
-echo "Projects:"
-for project in "${PROJECTS[@]}"; do
-    echo "  - $project"
-done
-
-echo ""
-echo "Solutions:"
-for solution in "${SOLUTIONS[@]}"; do
-    echo "  - $solution"
-done
-
 ###############################################################################
-# Restore
+# Restore all projects
 ###############################################################################
 
-echo ""
-echo "============================================================"
-echo " Restoring .NET dependencies"
-echo "============================================================"
+print_section "RESTORING ALL .CSPROJ FILES"
 
-RESTORE_FAILED=0
+PROJECT_NUMBER=0
 
 for project in "${PROJECTS[@]}"; do
+
+    PROJECT_NUMBER=$((PROJECT_NUMBER + 1))
 
     echo ""
     echo "------------------------------------------------------------"
-    echo "Restoring project:"
+    echo "Restoring project [$PROJECT_NUMBER/$PROJECT_COUNT]"
     echo "$project"
     echo "------------------------------------------------------------"
 
-    if ! dotnet restore "$project"; then
-        echo "ERROR: Restore failed for $project"
+    if dotnet restore "$project"; then
+
+        echo "Restore successful: $project"
+
+    else
+
+        echo "ERROR: Restore failed: $project"
         RESTORE_FAILED=1
+
     fi
 
 done
 
-if [ "$RESTORE_FAILED" -ne 0 ]; then
-    echo ""
-    echo "WARNING: One or more projects failed restore."
-    echo "Dependency reports may therefore be incomplete."
-fi
-
 ###############################################################################
-# Direct + Transitive dependency report
+# Direct + Transitive Dependency Report
 ###############################################################################
 
-echo ""
-echo "============================================================"
-echo " Generating consolidated dependency report"
-echo " Direct + Transitive dependencies"
-echo "============================================================"
+print_section "GENERATING CONSOLIDATED DIRECT + TRANSITIVE DEPENDENCY REPORT"
 
 DEPENDENCY_REPORT="$REPORT_DIR/dependency-report.txt"
 
+echo "Writing report:"
+echo "$DEPENDENCY_REPORT"
+
 {
-    echo "============================================================"
-    echo " CONSOLIDATED .NET DEPENDENCY REPORT"
-    echo " Direct + Transitive Dependencies"
-    echo " Generated: $(date)"
-    echo "============================================================"
+    print_separator
+    echo "CONSOLIDATED .NET DEPENDENCY REPORT"
+    echo "DIRECT + TRANSITIVE DEPENDENCIES"
+    echo "Generated: $(date)"
+    print_separator
+
     echo ""
+    echo "Total Projects: $PROJECT_COUNT"
+    echo "Total Solutions: $SOLUTION_COUNT"
+    echo ""
+
+    PROJECT_NUMBER=0
 
     for project in "${PROJECTS[@]}"; do
 
+        PROJECT_NUMBER=$((PROJECT_NUMBER + 1))
+
         echo ""
-        echo "################################################################"
-        echo "# PROJECT: $project"
-        echo "################################################################"
+        print_separator
+        echo "PROJECT [$PROJECT_NUMBER/$PROJECT_COUNT]"
+        echo "$project"
+        print_separator
         echo ""
 
-        dotnet list "$project" package --include-transitive || {
-            echo "ERROR: Dependency scan failed for $project"
-        }
+        if dotnet list "$project" package --include-transitive; then
+
+            echo ""
+            echo "Dependency scan successful."
+
+        else
+
+            echo ""
+            echo "ERROR: Dependency scan failed for:"
+            echo "$project"
+
+            DEPENDENCY_FAILED=1
+
+        fi
 
         echo ""
 
@@ -164,75 +299,97 @@ echo "Dependency report generated:"
 echo "$DEPENDENCY_REPORT"
 
 ###############################################################################
-# JSON dependency report
+# Per-project JSON dependency reports
 ###############################################################################
 
-echo ""
-echo "============================================================"
-echo " Generating JSON dependency reports"
-echo "============================================================"
+print_section "GENERATING JSON DEPENDENCY REPORTS"
 
-JSON_DIR="$REPORT_DIR/dependencies-json"
-mkdir -p "$JSON_DIR"
-
-PROJECT_INDEX=0
+PROJECT_NUMBER=0
 
 for project in "${PROJECTS[@]}"; do
 
-    PROJECT_INDEX=$((PROJECT_INDEX + 1))
+    PROJECT_NUMBER=$((PROJECT_NUMBER + 1))
 
-    # Convert project path into a safe filename
-    PROJECT_NAME=$(basename "$project" .csproj)
+    PROJECT_NAME="$(basename "$project" .csproj)"
 
-    JSON_FILE="$JSON_DIR/${PROJECT_INDEX}_${PROJECT_NAME}.json"
+    JSON_FILE="$JSON_DIR/${PROJECT_NUMBER}_${PROJECT_NAME}.json"
 
     echo ""
-    echo "Generating:"
-    echo "  Project : $project"
-    echo "  Output  : $JSON_FILE"
+    echo "Project:"
+    echo "$project"
 
-    dotnet list "$project" package \
+    echo "JSON output:"
+    echo "$JSON_FILE"
+
+    if dotnet list "$project" package \
         --include-transitive \
         --format json \
-        > "$JSON_FILE" || {
-            echo "ERROR: JSON dependency scan failed for $project"
-        }
+        > "$JSON_FILE"; then
+
+        echo "JSON dependency scan successful."
+
+    else
+
+        echo "ERROR: JSON dependency scan failed:"
+        echo "$project"
+
+        DEPENDENCY_FAILED=1
+
+    fi
 
 done
 
 ###############################################################################
-# License report - Direct + Transitive
+# Consolidated License Report
 ###############################################################################
 
-echo ""
-echo "============================================================"
-echo " Generating consolidated license report"
-echo " Direct + Transitive dependencies"
-echo "============================================================"
+print_section "GENERATING CONSOLIDATED LICENSE REPORT"
 
 LICENSE_REPORT="$REPORT_DIR/sbom-licenses.txt"
 
+echo "Writing report:"
+echo "$LICENSE_REPORT"
+
 {
-    echo "============================================================"
-    echo " CONSOLIDATED .NET LICENSE REPORT"
-    echo " Direct + Transitive Dependencies"
-    echo " Generated: $(date)"
-    echo "============================================================"
+    print_separator
+    echo "CONSOLIDATED .NET LICENSE REPORT"
+    echo "DIRECT + TRANSITIVE DEPENDENCIES"
+    echo "Generated: $(date)"
+    print_separator
+
     echo ""
+    echo "Total Projects: $PROJECT_COUNT"
+    echo ""
+
+    PROJECT_NUMBER=0
 
     for project in "${PROJECTS[@]}"; do
 
+        PROJECT_NUMBER=$((PROJECT_NUMBER + 1))
+
         echo ""
-        echo "################################################################"
-        echo "# PROJECT: $project"
-        echo "################################################################"
+        print_separator
+        echo "PROJECT [$PROJECT_NUMBER/$PROJECT_COUNT]"
+        echo "$project"
+        print_separator
         echo ""
 
-        dotnet-project-licenses \
+        if dotnet-project-licenses \
             -i "$project" \
-            --include-transitive || {
-                echo "ERROR: License scan failed for $project"
-            }
+            --include-transitive; then
+
+            echo ""
+            echo "License scan successful."
+
+        else
+
+            echo ""
+            echo "ERROR: License scan failed:"
+            echo "$project"
+
+            LICENSE_FAILED=1
+
+        fi
 
         echo ""
 
@@ -245,34 +402,53 @@ echo "License report generated:"
 echo "$LICENSE_REPORT"
 
 ###############################################################################
-# Outdated dependency report
+# Consolidated Outdated Dependency Report
 ###############################################################################
 
-echo ""
-echo "============================================================"
-echo " Generating outdated dependency report"
-echo "============================================================"
+print_section "GENERATING CONSOLIDATED OUTDATED DEPENDENCY REPORT"
 
 OUTDATED_REPORT="$REPORT_DIR/outdated-dependencies.txt"
 
+echo "Writing report:"
+echo "$OUTDATED_REPORT"
+
 {
-    echo "============================================================"
-    echo " CONSOLIDATED OUTDATED DEPENDENCY REPORT"
-    echo " Generated: $(date)"
-    echo "============================================================"
+    print_separator
+    echo "CONSOLIDATED OUTDATED DEPENDENCY REPORT"
+    echo "Generated: $(date)"
+    print_separator
+
     echo ""
+    echo "Total Projects: $PROJECT_COUNT"
+    echo ""
+
+    PROJECT_NUMBER=0
 
     for project in "${PROJECTS[@]}"; do
 
+        PROJECT_NUMBER=$((PROJECT_NUMBER + 1))
+
         echo ""
-        echo "################################################################"
-        echo "# PROJECT: $project"
-        echo "################################################################"
+        print_separator
+        echo "PROJECT [$PROJECT_NUMBER/$PROJECT_COUNT]"
+        echo "$project"
+        print_separator
         echo ""
 
-        dotnet list "$project" package --outdated || {
-            echo "WARNING: Outdated package check failed for $project"
-        }
+        if dotnet list "$project" package --outdated; then
+
+            echo ""
+            echo "Outdated dependency scan completed."
+
+        else
+
+            echo ""
+            echo "WARNING: Outdated dependency check failed:"
+            echo "$project"
+
+            OUTDATED_FAILED=1
+
+        fi
 
         echo ""
 
@@ -280,30 +456,74 @@ OUTDATED_REPORT="$REPORT_DIR/outdated-dependencies.txt"
 
 } > "$OUTDATED_REPORT"
 
+echo ""
+echo "Outdated dependency report generated:"
+echo "$OUTDATED_REPORT"
+
+###############################################################################
+# Display generated reports
+###############################################################################
+
+print_section "GENERATED REPORTS"
+
+echo "Report directory:"
+echo "$REPORT_DIR"
+
+echo ""
+
+find "$REPORT_DIR" -type f -print | sort
+
 ###############################################################################
 # Summary
 ###############################################################################
 
-echo ""
-echo "============================================================"
-echo " SCAN COMPLETE"
-echo "============================================================"
+print_section "SBOM SCAN SUMMARY"
 
-echo ""
-echo "Projects scanned:"
-echo "  ${#PROJECTS[@]}"
-
-echo ""
-echo "Solutions discovered:"
-echo "  ${#SOLUTIONS[@]}"
+echo "Projects discovered      : $PROJECT_COUNT"
+echo "Solutions discovered     : $SOLUTION_COUNT"
+echo "Restore failures         : $RESTORE_FAILED"
+echo "Dependency scan failures: $DEPENDENCY_FAILED"
+echo "License scan failures   : $LICENSE_FAILED"
+echo "Outdated scan failures  : $OUTDATED_FAILED"
 
 echo ""
 echo "Reports:"
-echo "  Dependency report : $DEPENDENCY_REPORT"
-echo "  License report    : $LICENSE_REPORT"
-echo "  Outdated report   : $OUTDATED_REPORT"
-echo "  JSON reports      : $JSON_DIR"
+echo "  Dependency report:"
+echo "    $DEPENDENCY_REPORT"
 
 echo ""
-echo "============================================================"
+echo "  License report:"
+echo "    $LICENSE_REPORT"
+
+echo ""
+echo "  Outdated dependency report:"
+echo "    $OUTDATED_REPORT"
+
+echo ""
+echo "  JSON dependency reports:"
+echo "    $JSON_DIR"
+
+###############################################################################
+# Final status
+###############################################################################
+
+if [ "$RESTORE_FAILED" -ne 0 ] || \
+   [ "$DEPENDENCY_FAILED" -ne 0 ] || \
+   [ "$LICENSE_FAILED" -ne 0 ]; then
+
+    echo ""
+    print_separator
+    echo "SBOM SCAN FAILED"
+    print_separator
+
+    exit 1
+
+fi
+
+echo ""
+print_separator
+echo "SBOM SCAN COMPLETED SUCCESSFULLY"
+print_separator
+
+exit 0
 ```
