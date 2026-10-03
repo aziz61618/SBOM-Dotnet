@@ -7,109 +7,200 @@ dependency_file="dependency-report.txt"
 output_file="formatted_dependencies.txt"
 csv_output_file="formatted_dependencies.csv"
 
-# Check if the input file exists
-if [[ ! -f "$input_file" ]]; then
-    echo "File $input_file not found!"
-    exit 1
-fi
-
-# Check if dependency report exists
+# Check if the dependency report exists
 if [[ ! -f "$dependency_file" ]]; then
     echo "File $dependency_file not found!"
     exit 1
 fi
 
-# Write the header to the output file
-echo -e "Dependency\tCurrent Version\tLatest Version\tDependency Type" > "$output_file"
-
-# Write the header to the CSV file
-echo '"Dependency","Current Version","Latest Version","Dependency Type"' > "$csv_output_file"
-
-# Initialize associative arrays
-declare -A seen_dependencies
-declare -A dependency_type
+# Check if outdated report exists
+if [[ ! -f "$input_file" ]]; then
+    echo "File $input_file not found!"
+    exit 1
+fi
 
 ###############################################################################
-# Read dependency-report.txt and determine Direct / Transitive
+# Output headers
+###############################################################################
+
+echo -e "Dependency\tCurrent Version\tLatest Version\tDependency Type" > "$output_file"
+
+echo '"Dependency","Current Version","Latest Version","Dependency Type"' > "$csv_output_file"
+
+###############################################################################
+# Initialize associative arrays
+###############################################################################
+
+declare -A dependency_type
+declare -A dependency_version
+declare -A latest_version
+declare -A seen_dependencies
+
+###############################################################################
+# Read dependency-report.txt
+#
+# This file is authoritative for:
+#   - ALL dependencies
+#   - Direct / Transitive
+#   - Resolved/current version
 ###############################################################################
 
 current_type=""
 
 while IFS= read -r line; do
 
-    # Detect direct dependency section
+    ###########################################################################
+    # Detect Direct dependency section
+    ###########################################################################
+
     if [[ "$line" == *"Top-level Package"* ]]; then
         current_type="Direct"
         continue
     fi
 
-    # Detect transitive dependency section
+    ###########################################################################
+    # Detect Transitive dependency section
+    ###########################################################################
+
     if [[ "$line" == *"Transitive Package"* ]]; then
         current_type="Transitive"
         continue
     fi
 
-    # Process dependency rows
-    if [[ "$line" == *">"* ]]; then
+    ###########################################################################
+    # Process package rows
+    ###########################################################################
+
+    if [[ "$line" =~ ^[[:space:]]*\>[[:space:]]+ ]]; then
 
         formatted_line=$(echo "$line" | sed 's/^[[:space:]]*>[[:space:]]*//')
 
         dependency=$(echo "$formatted_line" | awk '{print $1}')
 
-        if [[ -n "$dependency" && -n "$current_type" ]]; then
+        if [[ "$current_type" == "Direct" ]]; then
 
-            # If dependency is found as direct, Direct takes precedence
-            if [[ "$current_type" == "Direct" ]]; then
-                dependency_type[$dependency]="Direct"
+            current_version=$(echo "$formatted_line" | awk '{print $3}')
 
-            elif [[ -z "${dependency_type[$dependency]}" ]]; then
-                dependency_type[$dependency]="Transitive"
+            # Direct takes precedence if the same package appears elsewhere
+            dependency_type["$dependency"]="Direct"
+            dependency_version["$dependency"]="$current_version"
+
+        elif [[ "$current_type" == "Transitive" ]]; then
+
+            # Transitive rows have:
+            # PackageName ... ResolvedVersion
+            current_version=$(echo "$formatted_line" | awk '{print $NF}')
+
+            # Only set Transitive if package is not already Direct
+            if [[ -z "${dependency_type[$dependency]}" ]]; then
+                dependency_type["$dependency"]="Transitive"
+                dependency_version["$dependency"]="$current_version"
             fi
 
         fi
+
     fi
 
 done < "$dependency_file"
 
 ###############################################################################
-# Process outdated-dependencies.txt
+# Read outdated-dependencies.txt
+#
+# This file is authoritative only for:
+#   - Current version
+#   - Latest version
+#
+# Existing version parsing is intentionally preserved.
 ###############################################################################
 
 while IFS= read -r line; do
 
-    # Check if the line starts with '>'
     if [[ "$line" == *">"* ]]; then
 
-        # Remove '>' symbol and any leading spaces
         formatted_line=$(echo "$line" | sed 's/^[[:space:]]*>[[:space:]]*//')
 
-        # Extract dependency name, current version, and latest version
-        # (ignore resolved version)
+        # Preserve existing parsing
         dependency=$(echo "$formatted_line" | awk '{print $1}')
         current_version=$(echo "$formatted_line" | awk '{print $2}')
-        latest_version=$(echo "$formatted_line" | awk '{print $4}')
+        latest_version_value=$(echo "$formatted_line" | awk '{print $4}')
 
-        # Determine whether dependency is Direct or Transitive
-        dependency_type_value="${dependency_type[$dependency]:-Unknown}"
+        if [[ -n "$dependency" ]]; then
 
-        # Check if the dependency has already been added
-        if [[ -z "${seen_dependencies[$dependency]}" ]]; then
+            latest_version["$dependency"]="$latest_version_value"
 
-            # Write the formatted line to TXT
-            echo -e "$dependency\t$current_version\t$latest_version\t$dependency_type_value" >> "$output_file"
+            # Keep the existing current version from outdated report
+            dependency_version["$dependency"]="$current_version"
 
-            # Write the formatted line to CSV
-            echo "\"$dependency\",\"$current_version\",\"$latest_version\",\"$dependency_type_value\"" >> "$csv_output_file"
-
-            # Mark dependency as added
-            seen_dependencies[$dependency]=1
         fi
+
     fi
 
 done < "$input_file"
 
 ###############################################################################
-# Output file locations
+# Generate formatted output for ALL dependencies
+###############################################################################
+
+for dependency in "${!dependency_type[@]}"; do
+
+    current_version="${dependency_version[$dependency]}"
+    dependency_type_value="${dependency_type[$dependency]}"
+
+    ###########################################################################
+    # If package exists in outdated report
+    ###########################################################################
+
+    if [[ -n "${latest_version[$dependency]}" ]]; then
+
+        latest_version_value="${latest_version[$dependency]}"
+
+        # Preserve existing ** behavior
+        if [[ "$current_version" != "$latest_version_value" ]]; then
+            current_version="${current_version}**"
+            latest_version_value="${latest_version_value}**"
+        fi
+
+    else
+
+        #######################################################################
+        # Package is not outdated.
+        #
+        # We know current/resolved version, but we do NOT have a latest
+        # version from outdated-dependencies.txt.
+        #######################################################################
+
+        latest_version_value="N/A"
+
+    fi
+
+    ###########################################################################
+    # Prevent duplicates
+    ###########################################################################
+
+    if [[ -z "${seen_dependencies[$dependency]}" ]]; then
+
+        #######################################################################
+        # Write TXT
+        #######################################################################
+
+        echo -e "$dependency\t$current_version\t$latest_version_value\t$dependency_type_value" \
+            >> "$output_file"
+
+        #######################################################################
+        # Write CSV
+        #######################################################################
+
+        echo "\"$dependency\",\"$current_version\",\"$latest_version_value\",\"$dependency_type_value\"" \
+            >> "$csv_output_file"
+
+        seen_dependencies["$dependency"]=1
+
+    fi
+
+done
+
+###############################################################################
+# Output files
 ###############################################################################
 
 echo "Formatted dependencies saved to $output_file:"
