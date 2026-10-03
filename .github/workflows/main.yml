@@ -96,4 +96,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sbom-result
-          path: sbom-result.txt
+          path: |
+            sbom-result.txt
+            sbom-result.csv
