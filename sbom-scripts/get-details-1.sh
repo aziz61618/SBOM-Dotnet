@@ -444,64 +444,6 @@ echo ""
 echo "License report generated:"
 echo "$LICENSE_REPORT"
 
-###############################################################################
-# Consolidated Outdated Dependency Report
-###############################################################################
-
-print_section "GENERATING CONSOLIDATED OUTDATED DEPENDENCY REPORT"
-
-OUTDATED_REPORT="$REPORT_DIR/outdated-dependencies.txt"
-
-echo "Writing report:"
-echo "$OUTDATED_REPORT"
-
-{
-    print_separator
-    echo "CONSOLIDATED OUTDATED DEPENDENCY REPORT"
-    echo "Generated: $(date)"
-    print_separator
-
-    echo ""
-    echo "Total Projects: $PROJECT_COUNT"
-    echo ""
-
-    PROJECT_NUMBER=0
-
-    for project in "${PROJECTS[@]}"; do
-
-        PROJECT_NUMBER=$((PROJECT_NUMBER + 1))
-
-        echo ""
-        print_separator
-        echo "PROJECT [$PROJECT_NUMBER/$PROJECT_COUNT]"
-        echo "$project"
-        print_separator
-        echo ""
-
-        if dotnet list "$project" package --outdated; then
-
-            echo ""
-            echo "Outdated dependency scan completed."
-
-        else
-
-            echo ""
-            echo "WARNING: Outdated dependency check failed:"
-            echo "$project"
-
-            OUTDATED_FAILED=1
-
-        fi
-
-        echo ""
-
-    done
-
-} > "$OUTDATED_REPORT"
-
-echo ""
-echo "Outdated dependency report generated:"
-echo "$OUTDATED_REPORT"
 
 ###############################################################################
 # Display generated reports
@@ -527,7 +469,6 @@ echo "Solutions discovered      : $SOLUTION_COUNT"
 echo "Restore failures          : $RESTORE_FAILED"
 echo "Dependency scan failures : $DEPENDENCY_FAILED"
 echo "License scan failures    : $LICENSE_FAILED"
-echo "Outdated scan failures   : $OUTDATED_FAILED"
 
 echo ""
 echo "Reports:"
@@ -538,10 +479,6 @@ echo "    $DEPENDENCY_REPORT"
 echo ""
 echo "  License report:"
 echo "    $LICENSE_REPORT"
-
-echo ""
-echo "  Outdated dependency report:"
-echo "    $OUTDATED_REPORT"
 
 echo ""
 echo "  JSON dependency reports:"
