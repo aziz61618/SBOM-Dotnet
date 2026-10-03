@@ -55,6 +55,15 @@ jobs:
           echo "After get-details-1.sh:"
           ls -l
 
+      - name: Debug dependency classification
+        run: |
+          echo "================ dependency-report.txt ================"
+          cat dependency-report.txt
+      
+          echo ""
+          echo "================ formatted_dependencies.txt ================"
+          cat formatted_dependencies.txt
+
       - name: Run sbom-scripts/get-details-2.sh
         run: |
           export PATH=$HOME/dotnet:$PATH
