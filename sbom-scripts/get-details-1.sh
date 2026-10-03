@@ -3,17 +3,16 @@
 ###############################################################################
 # .NET SBOM / Dependency / License Scanner
 #
-# Purpose:
-#   - Discover ALL .csproj and .sln files recursively
-#   - Restore ALL projects
-#   - Scan DIRECT + TRANSITIVE NuGet dependencies
-#   - Generate consolidated dependency report
-#   - Generate per-project JSON dependency reports
-#   - Generate consolidated license report
-#   - Generate consolidated outdated dependency report
-#
-# Expected .NET installation:
-#   $HOME/dotnet
+# Features:
+#   - Discovers all .csproj recursively
+#   - Discovers all .sln recursively
+#   - Excludes bin/ and obj/
+#   - Restores every discovered project
+#   - Generates DIRECT + TRANSITIVE dependency report
+#   - Generates JSON dependency reports
+#   - Generates DIRECT + TRANSITIVE license report
+#   - Uses project.assets.json for resolved dependency information
+#   - Generates outdated dependency report
 ###############################################################################
 
 set -u
@@ -22,8 +21,8 @@ set -u
 # Configuration
 ###############################################################################
 
-export DOTNET_ROOT="$HOME/dotnet"
-export PATH="$HOME/dotnet:$HOME/.dotnet/tools:$PATH"
+export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/dotnet}"
+export PATH="$DOTNET_ROOT:$HOME/.dotnet/tools:$PATH"
 
 REPORT_DIR="./sbom-reports"
 JSON_DIR="$REPORT_DIR/dependencies-json"
@@ -52,17 +51,13 @@ print_section() {
 }
 
 ###############################################################################
-# Environment validation
+# Validate .NET
 ###############################################################################
 
 print_section ".NET ENVIRONMENT"
 
 echo "DOTNET_ROOT:"
 echo "$DOTNET_ROOT"
-
-echo ""
-echo "PATH:"
-echo "$PATH"
 
 echo ""
 echo "dotnet location:"
@@ -85,10 +80,10 @@ echo "Checking libhostfxr.so:"
 find "$DOTNET_ROOT" -name "libhostfxr.so" -print || true
 
 ###############################################################################
-# Install / verify dotnet-project-licenses
+# Verify dotnet-project-licenses
 ###############################################################################
 
-print_section "INSTALLING / VERIFYING DOTNET PROJECT LICENSES"
+print_section "VERIFYING DOTNET PROJECT LICENSES"
 
 if ! command -v dotnet-project-licenses >/dev/null 2>&1; then
 
@@ -114,17 +109,12 @@ echo "dotnet-project-licenses location:"
 which dotnet-project-licenses || true
 
 echo ""
-echo "Verifying dotnet-project-licenses..."
+echo "dotnet-project-licenses version:"
 
-dotnet-project-licenses --help >/dev/null
-
-if [ $? -ne 0 ]; then
-    echo "ERROR: dotnet-project-licenses could not be executed."
-    echo "Check DOTNET_ROOT and libhostfxr.so."
-    exit 1
-fi
-
-echo "dotnet-project-licenses is working."
+# IMPORTANT:
+# Do NOT use `--help` for health checking.
+# Version 2.7.1 prints help successfully but can return a non-zero code.
+dotnet-project-licenses --version || true
 
 ###############################################################################
 # Discover all .csproj files
@@ -150,6 +140,7 @@ if [ "$PROJECT_COUNT" -eq 0 ]; then
     echo ""
     echo "ERROR: No .csproj files found."
     echo "Make sure the source repository has been checked out."
+
     exit 1
 
 fi
@@ -237,6 +228,49 @@ for project in "${PROJECTS[@]}"; do
 done
 
 ###############################################################################
+# Verify project.assets.json
+###############################################################################
+
+print_section "VERIFYING RESTORE ASSETS"
+
+ASSETS_FAILED=0
+
+for project in "${PROJECTS[@]}"; do
+
+    PROJECT_DIR="$(dirname "$project")"
+    ASSETS_FILE="$PROJECT_DIR/obj/project.assets.json"
+
+    echo ""
+    echo "Project:"
+    echo "$project"
+
+    if [ -f "$ASSETS_FILE" ]; then
+
+        echo "project.assets.json: FOUND"
+        echo "$ASSETS_FILE"
+
+    else
+
+        echo "ERROR: project.assets.json NOT FOUND"
+        echo "$ASSETS_FILE"
+
+        ASSETS_FAILED=1
+
+    fi
+
+done
+
+if [ "$ASSETS_FAILED" -ne 0 ]; then
+
+    echo ""
+    echo "ERROR: One or more project.assets.json files are missing."
+    echo "The transitive dependency/license scan cannot be considered complete."
+
+    exit 1
+
+fi
+
+###############################################################################
 # Direct + Transitive Dependency Report
 ###############################################################################
 
@@ -255,7 +289,7 @@ echo "$DEPENDENCY_REPORT"
     print_separator
 
     echo ""
-    echo "Total Projects: $PROJECT_COUNT"
+    echo "Total Projects : $PROJECT_COUNT"
     echo "Total Solutions: $SOLUTION_COUNT"
     echo ""
 
@@ -280,7 +314,7 @@ echo "$DEPENDENCY_REPORT"
         else
 
             echo ""
-            echo "ERROR: Dependency scan failed for:"
+            echo "ERROR: Dependency scan failed:"
             echo "$project"
 
             DEPENDENCY_FAILED=1
@@ -342,7 +376,7 @@ done
 # Consolidated License Report
 ###############################################################################
 
-print_section "GENERATING CONSOLIDATED LICENSE REPORT"
+print_section "GENERATING CONSOLIDATED DIRECT + TRANSITIVE LICENSE REPORT"
 
 LICENSE_REPORT="$REPORT_DIR/sbom-licenses.txt"
 
@@ -373,9 +407,20 @@ echo "$LICENSE_REPORT"
         print_separator
         echo ""
 
+        # -t / --include-transitive
+        #
+        # --use-project-assets-json
+        # tells the tool to use the dependency graph produced by
+        # dotnet restore from obj/project.assets.json.
+        #
+        # This is important because we want the resolved
+        # DIRECT + TRANSITIVE dependency information.
+
         if dotnet-project-licenses \
-            -i "$project" \
-            --include-transitive; then
+            --input "$project" \
+            --include-transitive \
+            --use-project-assets-json \
+            --include-project-file; then
 
             echo ""
             echo "License scan successful."
@@ -478,15 +523,16 @@ find "$REPORT_DIR" -type f -print | sort
 
 print_section "SBOM SCAN SUMMARY"
 
-echo "Projects discovered      : $PROJECT_COUNT"
-echo "Solutions discovered     : $SOLUTION_COUNT"
-echo "Restore failures         : $RESTORE_FAILED"
-echo "Dependency scan failures: $DEPENDENCY_FAILED"
-echo "License scan failures   : $LICENSE_FAILED"
-echo "Outdated scan failures  : $OUTDATED_FAILED"
+echo "Projects discovered       : $PROJECT_COUNT"
+echo "Solutions discovered      : $SOLUTION_COUNT"
+echo "Restore failures          : $RESTORE_FAILED"
+echo "Dependency scan failures : $DEPENDENCY_FAILED"
+echo "License scan failures    : $LICENSE_FAILED"
+echo "Outdated scan failures   : $OUTDATED_FAILED"
 
 echo ""
 echo "Reports:"
+echo ""
 echo "  Dependency report:"
 echo "    $DEPENDENCY_REPORT"
 
