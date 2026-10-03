@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 
 ###############################################################################
@@ -526,4 +525,3 @@ echo "SBOM SCAN COMPLETED SUCCESSFULLY"
 print_separator
 
 exit 0
-```
