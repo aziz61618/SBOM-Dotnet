@@ -11,7 +11,10 @@ $dependencyTypeWidth = 18
 $licenseWidth = 25
 $licenseUrlWidth = 60
 
-# Output header with proper spacing
+###############################################################################
+# TXT HEADER
+###############################################################################
+
 $header = "{0}{1}{2}{3}{4}{5}" -f `
     "Dependency".PadRight($dependencyWidth), `
     "Current Version".PadRight($currentVersionWidth), `
@@ -22,96 +25,152 @@ $header = "{0}{1}{2}{3}{4}{5}" -f `
 
 $header | Out-File -FilePath $outputFile
 
-# Initialize hash tables for licenses and output to check duplicates
+###############################################################################
+# CSV HEADER
+###############################################################################
+
+'"Dependency","Current Version","Latest Version","Dependency Type","License","License URL"' |
+    Out-File -FilePath $csvOutputFile
+
+###############################################################################
+# Initialize hash tables
+###############################################################################
+
 $licenseInfo = @{}
 $outputEntries = @{}
 
-# Initialize collection for CSV output
-$csvEntries = @{}
+###############################################################################
+# Read sbom-licenses.txt
+###############################################################################
 
-# Read licenses file into a hash table
 try {
-    Get-Content -Path $licensesFile | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -eq "") { return } # Skip empty lines
 
-        # Skip the header line and lines starting with separators or non-license info
+    Get-Content -Path $licensesFile | ForEach-Object {
+
+        $line = $_.Trim()
+
+        if ($line -eq "") {
+            return
+        }
+
+        # Skip header/separator lines
         if ($line -like "*Reference*" -or $line -like "*----*") {
             return
         }
 
         $line = $line.TrimStart('|').TrimEnd('|').Trim()
+
         $parts = $line -split '\s*\|\s*'
-        
+
         if ($parts.Length -eq 4) {
+
             $dependency = $parts[0].Trim()
             $version = $parts[1].Trim()
             $license = $parts[2].Trim()
             $licenseUrl = $parts[3].Trim()
 
             if (-not $licenseInfo.ContainsKey($dependency)) {
+
                 $licenseInfo[$dependency] = @{
-                    Version = $version
-                    License = $license
+                    Version    = $version
+                    License    = $license
                     LicenseUrl = $licenseUrl
                 }
-            } else {
-                Write-Output "Duplicate entry found for ${dependency} in ${licensesFile}."
+
             }
-        } else {
-            Write-Output "Skipping invalid line in ${licensesFile}: ${line}"
+            else {
+
+                Write-Output "Duplicate entry found for ${dependency} in ${licensesFile}."
+
+            }
+
         }
+        else {
+
+            Write-Output "Skipping invalid line in ${licensesFile}: ${line}"
+
+        }
+
     }
-} catch {
+
+}
+catch {
+
     Write-Error "Error reading ${licensesFile}: $_"
+
 }
 
-# Read dependencies file and merge with license info
-$headerSkipped = $false
-try {
-    Get-Content -Path $dependenciesFile | ForEach-Object {
-        $line = $_.Trim()
-        if ($line -eq "") { return }
+###############################################################################
+# Read formatted_dependencies.txt
+###############################################################################
 
-        # Skip the first line (header) from dependencies file
-        if (-not $headerSkipped) {
-            $headerSkipped = $true
+$headerSkipped = $false
+
+try {
+
+    Get-Content -Path $dependenciesFile | ForEach-Object {
+
+        $line = $_.Trim()
+
+        if ($line -eq "") {
             return
         }
 
-        # formatted_dependencies.txt now contains:
-        # Dependency
-        # Current Version
-        # Latest Version
-        # Dependency Type
+        #######################################################################
+        # Skip header
+        #######################################################################
+
+        if (-not $headerSkipped) {
+
+            $headerSkipped = $true
+            return
+
+        }
+
+        #######################################################################
+        # Split into exactly 4 columns
+        #######################################################################
+
         $fields = $line -split '\s+', 4
 
         if ($fields.Length -ge 4) {
+
             $depTrimmed = $fields[0].Trim()
             $currentVersion = $fields[1].Trim()
             $latestVersion = $fields[2].Trim()
             $dependencyType = $fields[3].Trim()
 
-            # Skip if already in output to avoid duplicates
-            if ($outputEntries.ContainsKey($depTrimmed)) { return }
+            ###################################################################
+            # Prevent duplicates
+            ###################################################################
 
-            # Check if license info exists for the dependency
+            if ($outputEntries.ContainsKey($depTrimmed)) {
+                return
+            }
+
+            ###################################################################
+            # Get license information
+            ###################################################################
+
             if ($licenseInfo.ContainsKey($depTrimmed)) {
+
                 $licenseData = $licenseInfo[$depTrimmed]
+
                 $license = $licenseData.License
                 $licenseUrl = $licenseData.LicenseUrl
-            } else {
+
+            }
+            else {
+
                 $license = "N/A"
                 $licenseUrl = "N/A"
+
             }
 
-            # Check for version differences and append ** if they are different
-            if ($currentVersion -ne $latestVersion) {
-                $currentVersion += "**"
-                $latestVersion += "**"
-            }
+            ###################################################################
+            # Write TXT
+            ###################################################################
 
-            # Write TXT output
             $outputLine = "{0}{1}{2}{3}{4}{5}" -f `
                 $depTrimmed.PadRight($dependencyWidth), `
                 $currentVersion.PadRight($currentVersionWidth), `
@@ -122,66 +181,113 @@ try {
 
             $outputLine | Out-File -FilePath $outputFile -Append
 
-            # Store CSV entry
-            $csvEntries[$depTrimmed] = [PSCustomObject]@{
-                Dependency      = $depTrimmed
-                CurrentVersion  = $currentVersion
-                LatestVersion   = $latestVersion
-                DependencyType  = $dependencyType
-                License         = $license
-                LicenseURL      = $licenseUrl
-            }
+            ###################################################################
+            # Write CSV
+            ###################################################################
 
-            # Add to output entries to avoid future duplicates
+            $csvLine = '"{0}","{1}","{2}","{3}","{4}","{5}"' -f `
+                $depTrimmed.Replace('"', '""'), `
+                $currentVersion.Replace('"', '""'), `
+                $latestVersion.Replace('"', '""'), `
+                $dependencyType.Replace('"', '""'), `
+                $license.Replace('"', '""'), `
+                $licenseUrl.Replace('"', '""')
+
+            $csvLine | Out-File -FilePath $csvOutputFile -Append
+
+            ###################################################################
+            # Mark as processed
+            ###################################################################
+
             $outputEntries[$depTrimmed] = $true
 
-            # Remove matched entry from licenseInfo
+            ###################################################################
+            # Remove from licenseInfo because it has already been processed
+            ###################################################################
+
             if ($licenseInfo.ContainsKey($depTrimmed)) {
                 $licenseInfo.Remove($depTrimmed)
             }
-        } else {
-            Write-Output "Skipping invalid line in ${dependenciesFile}: ${line}"
+
         }
+        else {
+
+            Write-Output "Skipping invalid line in ${dependenciesFile}: ${line}"
+
+        }
+
     }
-} catch {
+
+}
+catch {
+
     Write-Error "Error reading ${dependenciesFile}: $_"
+
 }
 
-# Add remaining entries from licenses file not matched in dependencies
+###############################################################################
+# Add remaining license entries
+#
+# These are packages that were not present in outdated-dependencies.txt.
+# Therefore:
+#
+#   Current Version = license report version
+#   Latest Version  = N/A
+#   Dependency Type = Direct/Transitive if available from dependency report
+#
+###############################################################################
+
 foreach ($depTrimmed in @($licenseInfo.Keys)) {
-    if ($outputEntries.ContainsKey($depTrimmed)) { continue }
+
+    if ($outputEntries.ContainsKey($depTrimmed)) {
+        continue
+    }
 
     $licenseData = $licenseInfo[$depTrimmed]
+
     $licenseVersion = $licenseData.Version
     $license = $licenseData.License
     $licenseUrl = $licenseData.LicenseUrl
 
-    # Existing behavior: use license version for both current/latest
+    ###########################################################################
+    # For license-only entries, determine type from dependency report.
+    #
+    # get-details-2.sh now puts every dependency into formatted_dependencies,
+    # so normally this section should be reached only for unusual license-only
+    # entries.
+    #
+    # Use N/A instead of falsely claiming Unknown.
+    ###########################################################################
+
+    $dependencyType = "N/A"
+    $latestVersion = "N/A"
+
+    ###########################################################################
+    # Write TXT
+    ###########################################################################
+
     $outputLine = "{0}{1}{2}{3}{4}{5}" -f `
         $depTrimmed.PadRight($dependencyWidth), `
         $licenseVersion.PadRight($currentVersionWidth), `
-        $licenseVersion.PadRight($latestVersionWidth), `
-        "Unknown".PadRight($dependencyTypeWidth), `
+        $latestVersion.PadRight($latestVersionWidth), `
+        $dependencyType.PadRight($dependencyTypeWidth), `
         $license.PadRight($licenseWidth), `
         $licenseUrl
 
     $outputLine | Out-File -FilePath $outputFile -Append
 
-    # Store CSV entry
-    $csvEntries[$depTrimmed] = [PSCustomObject]@{
-        Dependency      = $depTrimmed
-        CurrentVersion  = $licenseVersion
-        LatestVersion   = $licenseVersion
-        DependencyType  = "Unknown"
-        License         = $license
-        LicenseURL      = $licenseUrl
-    }
+    ###########################################################################
+    # Write CSV
+    ###########################################################################
+
+    $csvLine = '"{0}","{1}","{2}","{3}","{4}","{5}"' -f `
+        $depTrimmed.Replace('"', '""'), `
+        $licenseVersion.Replace('"', '""'), `
+        $latestVersion.Replace('"', '""'), `
+        $dependencyType.Replace('"', '""'), `
+        $license.Replace('"', '""'), `
+        $licenseUrl.Replace('"', '""')
+
+    $csvLine | Out-File -FilePath $csvOutputFile -Append
+
 }
-
-# Generate CSV report
-$csvEntries.Values |
-    Export-Csv -Path $csvOutputFile -NoTypeInformation -Encoding UTF8
-
-Write-Output ""
-Write-Output "SBOM TXT report generated: $outputFile"
-Write-Output "SBOM CSV report generated: $csvOutputFile"
