@@ -1,19 +1,22 @@
 $dependenciesFile = "formatted_dependencies.txt"
 $licensesFile = "sbom-licenses.txt"
 $outputFile = "sbom-result.txt"
+$csvOutputFile = "sbom-result.csv"
 
 # Column widths
 $dependencyWidth = 50
 $currentVersionWidth = 15
 $latestVersionWidth = 15
+$dependencyTypeWidth = 18
 $licenseWidth = 25
 $licenseUrlWidth = 60
 
 # Output header with proper spacing
-$header = "{0}{1}{2}{3}{4}" -f `
+$header = "{0}{1}{2}{3}{4}{5}" -f `
     "Dependency".PadRight($dependencyWidth), `
     "Current Version".PadRight($currentVersionWidth), `
     "Latest Version".PadRight($latestVersionWidth), `
+    "Dependency Type".PadRight($dependencyTypeWidth), `
     "License".PadRight($licenseWidth), `
     "License URL"
 
@@ -22,6 +25,9 @@ $header | Out-File -FilePath $outputFile
 # Initialize hash tables for licenses and output to check duplicates
 $licenseInfo = @{}
 $outputEntries = @{}
+
+# Initialize collection for CSV output
+$csvEntries = @{}
 
 # Read licenses file into a hash table
 try {
@@ -73,12 +79,18 @@ try {
             return
         }
 
-        # Adjust parsing logic based on expected format
-        $fields = $line -split '\s+', 3
-        if ($fields.Length -ge 3) {
+        # formatted_dependencies.txt now contains:
+        # Dependency
+        # Current Version
+        # Latest Version
+        # Dependency Type
+        $fields = $line -split '\s+', 4
+
+        if ($fields.Length -ge 4) {
             $depTrimmed = $fields[0].Trim()
             $currentVersion = $fields[1].Trim()
             $latestVersion = $fields[2].Trim()
+            $dependencyType = $fields[3].Trim()
 
             # Skip if already in output to avoid duplicates
             if ($outputEntries.ContainsKey($depTrimmed)) { return }
@@ -99,13 +111,26 @@ try {
                 $latestVersion += "**"
             }
 
-            $outputLine = "{0}{1}{2}{3}{4}" -f `
+            # Write TXT output
+            $outputLine = "{0}{1}{2}{3}{4}{5}" -f `
                 $depTrimmed.PadRight($dependencyWidth), `
                 $currentVersion.PadRight($currentVersionWidth), `
                 $latestVersion.PadRight($latestVersionWidth), `
+                $dependencyType.PadRight($dependencyTypeWidth), `
                 $license.PadRight($licenseWidth), `
                 $licenseUrl
+
             $outputLine | Out-File -FilePath $outputFile -Append
+
+            # Store CSV entry
+            $csvEntries[$depTrimmed] = [PSCustomObject]@{
+                Dependency      = $depTrimmed
+                CurrentVersion  = $currentVersion
+                LatestVersion   = $latestVersion
+                DependencyType  = $dependencyType
+                License         = $license
+                LicenseURL      = $licenseUrl
+            }
 
             # Add to output entries to avoid future duplicates
             $outputEntries[$depTrimmed] = $true
@@ -123,18 +148,40 @@ try {
 }
 
 # Add remaining entries from licenses file not matched in dependencies
-foreach ($depTrimmed in $licenseInfo.Keys) {
+foreach ($depTrimmed in @($licenseInfo.Keys)) {
     if ($outputEntries.ContainsKey($depTrimmed)) { continue }
 
     $licenseData = $licenseInfo[$depTrimmed]
     $licenseVersion = $licenseData.Version
     $license = $licenseData.License
     $licenseUrl = $licenseData.LicenseUrl
-    $outputLine = "{0}{1}{2}{3}{4}" -f `
+
+    # Existing behavior: use license version for both current/latest
+    $outputLine = "{0}{1}{2}{3}{4}{5}" -f `
         $depTrimmed.PadRight($dependencyWidth), `
         $licenseVersion.PadRight($currentVersionWidth), `
         $licenseVersion.PadRight($latestVersionWidth), `
+        "Unknown".PadRight($dependencyTypeWidth), `
         $license.PadRight($licenseWidth), `
         $licenseUrl
+
     $outputLine | Out-File -FilePath $outputFile -Append
+
+    # Store CSV entry
+    $csvEntries[$depTrimmed] = [PSCustomObject]@{
+        Dependency      = $depTrimmed
+        CurrentVersion  = $licenseVersion
+        LatestVersion   = $licenseVersion
+        DependencyType  = "Unknown"
+        License         = $license
+        LicenseURL      = $licenseUrl
+    }
 }
+
+# Generate CSV report
+$csvEntries.Values |
+    Export-Csv -Path $csvOutputFile -NoTypeInformation -Encoding UTF8
+
+Write-Output ""
+Write-Output "SBOM TXT report generated: $outputFile"
+Write-Output "SBOM CSV report generated: $csvOutputFile"
