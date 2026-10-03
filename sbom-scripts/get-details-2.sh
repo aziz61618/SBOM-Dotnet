@@ -1,4 +1,3 @@
-```bash
 #################### for command dotnet --list package #####################
 #!/bin/bash
 
@@ -119,4 +118,3 @@ cat "$output_file"
 echo ""
 echo "Formatted dependencies CSV saved to $csv_output_file:"
 cat "$csv_output_file"
-```
