@@ -12,7 +12,6 @@
 #   - Generates JSON dependency reports
 #   - Generates DIRECT + TRANSITIVE license report
 #   - Uses project.assets.json for resolved dependency information
-#   - Generates outdated dependency report
 ###############################################################################
 
 set -u
@@ -32,7 +31,6 @@ mkdir -p "$JSON_DIR"
 RESTORE_FAILED=0
 DEPENDENCY_FAILED=0
 LICENSE_FAILED=0
-OUTDATED_FAILED=0
 
 ###############################################################################
 # Helper functions
