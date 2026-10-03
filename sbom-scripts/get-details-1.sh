@@ -24,10 +24,9 @@ set -u
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/dotnet}"
 export PATH="$DOTNET_ROOT:$HOME/.dotnet/tools:$PATH"
 
-REPORT_DIR="./sbom-reports"
+REPORT_DIR="."
 JSON_DIR="$REPORT_DIR/dependencies-json"
 
-mkdir -p "$REPORT_DIR"
 mkdir -p "$JSON_DIR"
 
 RESTORE_FAILED=0
