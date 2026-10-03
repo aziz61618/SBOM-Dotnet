@@ -59,10 +59,6 @@ jobs:
         run: |
           echo "================ dependency-report.txt ================"
           cat dependency-report.txt
-      
-          echo ""
-          echo "================ formatted_dependencies.txt ================"
-          cat formatted_dependencies.txt
 
       - name: Run sbom-scripts/get-details-2.sh
         run: |
