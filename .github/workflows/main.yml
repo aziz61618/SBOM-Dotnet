@@ -85,20 +85,20 @@ jobs:
           sbom-scripts/merge-details.ps1
           echo "After merge-details.ps1:"
           ls -l
-          cat sbom-result.txt || echo "sbom-result.txt not found"
+          cat sbom-result.csv  || echo "sbom-result.csv not found"
 
       - name: Run sbom-scripts/trivy.sh
         run: |
           bash sbom-scripts/trivy.sh
           echo "After trivy.sh:"
           ls -l
-          cat trivy-vulnerabilities.txt || echo "trivy-vulnerabilities.txt not found"
+          cat trivy-consolidated-report.csv || echo "trivy-consolidated-report.csv not found"
 
       - name: Upload Trivy Vulnerabilities
         uses: actions/upload-artifact@v4
         with:
           name: trivy-vulnerabilities
-          path: trivy-vulnerabilities.txt
+          path: trivy-consolidated-report.csv
 
       - name: Upload SBOM Result
         uses: actions/upload-artifact@v4
