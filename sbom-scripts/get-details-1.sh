@@ -211,7 +211,7 @@ for project in "${PROJECTS[@]}"; do
     echo "$project"
     echo "------------------------------------------------------------"
 
-    if dotnet restore "$project"; then
+    if dotnet restore "$project" -p:RestorePackagesWithLockFile=true; then
 
         echo "Restore successful: $project"
 
@@ -223,6 +223,32 @@ for project in "${PROJECTS[@]}"; do
     fi
 
 done
+
+###############################################################################
+# Verify NuGet lock files for Trivy
+###############################################################################
+
+print_section "VERIFYING NUGET LOCK FILES"
+
+mapfile -d '' LOCK_FILES < <(
+    find . \
+        -type d \( -name .git -o -name .svn -o -name .hg \) -prune -o \
+        -type f -name "packages.lock.json" \
+        -not -path "*/bin/*" \
+        -not -path "*/obj/*" \
+        -print0
+)
+
+LOCK_FILE_COUNT="${#LOCK_FILES[@]}"
+
+echo "NuGet lock files found: $LOCK_FILE_COUNT"
+
+if [ "$LOCK_FILE_COUNT" -gt 0 ]; then
+    printf '%s\n' "${LOCK_FILES[@]}"
+else
+    echo "WARNING: No packages.lock.json files were generated."
+    echo "Trivy may not find supported .NET dependency manifests."
+fi
 
 ###############################################################################
 # Verify project.assets.json
